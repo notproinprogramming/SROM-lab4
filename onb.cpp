@@ -1,10 +1,15 @@
 #include <algorithm>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
 #include <x86intrin.h>
 #define M 173 // m = 173, 2m+1 = 347 (просте), 347 = 3(mod4) -> ОНБ другого типу
+
+enum class OutputFormat { Binary, Hex };
+
+OutputFormat g_outputFormat = OutputFormat::Binary;
 
 using LambdaMatrix = std::vector<std::vector<bool>>;
 
@@ -33,6 +38,30 @@ LambdaMatrix computeLambda() {
     return Lambda;
 }
 
+void PrintLambda(const LambdaMatrix &Lambda) {
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < M; ++j) {
+            std::cout << (Lambda[i][j] ? '1' : '0');
+        }
+        std::cout << '\n';
+    }
+}
+
+void SaveLambdaToFile(const LambdaMatrix &Lambda, const std::string &filename) {
+    std::ofstream out(filename);
+    if (!out) {
+        throw std::runtime_error("Cannot open file: " + filename);
+    }
+
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < M; ++j) {
+            out << (Lambda[i][j] ? '1' : '0');
+        }
+        out << '\n';
+    }
+
+    out.close();
+}
 LambdaMatrix Lambda = computeLambda();
 
 inline uint64_t rdtsc() { return __rdtsc(); }
@@ -117,6 +146,7 @@ class Galois {
         Galois square() const {
             Galois result;
             for (int i = 0; i < M; ++i) {
+
                 result.bits[(i + 1) % M] = bits[i];
             }
             return result;
@@ -144,47 +174,157 @@ class Galois {
         Galois operator*(const Galois &other) const {
             return this->multiply(other);
         }
-        void Print(const std::string &name) const {
+
+        /*
+         void Print(const std::string &name) const {
+                  std::string hex;
+                  for (int i = 0; i < M; i += 4) {
+                      int v = 0;
+                      for (int b = 0; b < 4; ++b) {
+                          if (i + b < M && bits[i + b])
+                              v |= (1 << b);
+                      }
+                      hex.push_back(hexChar(v));
+                  }
+                             while (hex.size() > 1 && hex.back() == '0')
+                                 hex.pop_back();
+                  std::reverse(hex.begin(), hex.end());
+                  std::cout << name << " = " << hex << std::endl;
+              }
+      */
+
+        void PrintHex(const std::string &name) const {
             std::string hex;
-            for (int i = 0; i < M; i += 4) {
-                int v = 0;
+            hex.reserve((M + 3) / 4);
+
+            int pos = 0;
+
+            int first_bits = M % 4;
+            if (first_bits == 0)
+                first_bits = 4;
+
+            int v = 0;
+            for (int b = 0; b < first_bits; ++b) {
+                if (bits[pos++]) {
+                    v |= 1 << (first_bits - 1 - b);
+                }
+            }
+            hex.push_back(hexChar(v));
+
+            while (pos < M) {
+                v = 0;
                 for (int b = 0; b < 4; ++b) {
-                    if (i + b < M && bits[i + b])
-                        v |= (1 << b);
+                    if (bits[pos++]) {
+                        v |= 1 << (3 - b);
+                    }
                 }
                 hex.push_back(hexChar(v));
             }
-            while (hex.size() > 1 && hex.back() == '0')
-                hex.pop_back();
-            std::reverse(hex.begin(), hex.end());
+
             std::cout << name << " = " << hex << std::endl;
         }
 
+        void PrintBin(const std::string &name) const {
+            std::cout << name << " =\n";
+            for (int i = 0; i < M; ++i) {
+                std::cout << (bits[i] ? '1' : '0');
+            }
+            std::cout << "\n\n";
+        }
+
+        void Print(const std::string &name) const {
+            if (g_outputFormat == OutputFormat::Binary) {
+                PrintBin(name);
+            } else {
+                PrintHex(name);
+            }
+        }
+        /*
+                static Galois fromHex(const std::string &hex) {
+                    Galois res;
+                    int bitPos = 0;
+                    for (int i = hex.size() - 1; i >= 0; --i) {
+                        int v = hexValue(hex[i]);
+                        for (int b = 0; b < 4; ++b) {
+                            if (bitPos < M) {
+                                res.bits[bitPos] = (v >> b) & 1;
+                                bitPos++;
+                            }
+                        }
+                    }
+                    return res;
+                }
+        */
         static Galois fromHex(const std::string &hex) {
             Galois res;
-            int bitPos = 0;
-            for (int i = hex.size() - 1; i >= 0; --i) {
+
+            int bitPos = M - 1;
+
+            for (int i = 0; i < (int)hex.size(); ++i) {
                 int v = hexValue(hex[i]);
-                for (int b = 0; b < 4; ++b) {
-                    if (bitPos < M) {
-                        res.bits[bitPos] = (v >> b) & 1;
-                        bitPos++;
+
+                for (int b = 0; b <= 3; ++b) {
+                    if (bitPos >= 0) {
+                        res.bits[bitPos] = (v << b) & 1;
+                        bitPos--;
                     }
                 }
             }
+
             return res;
         }
-        // Піднесення до степеня
-        Galois operator^(const std::string &hexExponent) const {
+
+        static Galois fromBinaryString(const std::string &s) {
+            Galois res;
+
+            int len = std::min((int)s.size(), M);
+            for (int i = 0; i < len; ++i) {
+                if (s[i] == '0')
+                    res.bits[i] = false;
+                else if (s[i] == '1')
+                    res.bits[i] = true;
+                else
+                    throw std::runtime_error(
+                        "Invalid character in binary string");
+            }
+
+            return res;
+        }
+
+        static std::vector<bool> exponentBits(const std::string &s) {
+            std::vector<bool> bits;
+
+            if (g_outputFormat == OutputFormat::Binary) {
+                for (char c : s) {
+                    if (c == '0')
+                        bits.push_back(false);
+                    else if (c == '1')
+                        bits.push_back(true);
+                    else
+                        throw std::runtime_error("Invalid binary exponent");
+                }
+            } else {
+                for (char c : s) {
+                    int v = hexValue(c);
+                    for (int b = 3; b >= 0; --b) {
+                        bits.push_back((v >> b) & 1);
+                    }
+                }
+            }
+
+            return bits;
+        }
+
+        Galois operator^(const std::string &exp) const {
             Galois result = Galois::one();
             Galois base = *this;
-            for (char c : hexExponent) {
-                int v = hexValue(c);
-                for (int b = 3; b >= 0; --b) {
-                    result = result.square();
-                    if ((v >> b) & 1) {
-                        result = result * base;
-                    }
+
+            std::vector<bool> bits = exponentBits(exp);
+
+            for (bool bit : bits) {
+                result = result.square();
+                if (bit) {
+                    result = result * base;
                 }
             }
             return result;
@@ -204,7 +344,6 @@ class Galois {
             return res;
         }
 
-        // Слід (Trace) в ОНБ - це просто XOR усіх бітів
         bool Trace() const {
             bool tr = false;
             for (int i = 0; i < M; ++i) {
@@ -213,28 +352,68 @@ class Galois {
             return tr;
         }
 
-        // Інверсія за алгоритмом Іто-Цудзіі
-        Galois Inverse() const {
-            Galois res = *this;
-            Galois one_val = Galois::one();
-            Galois temp = *this;
-            for (int i = 1; i < M; ++i) {
-                temp = temp.square() * res;
+        bool operator==(const Galois &other) const {
+            for (int i = 0; i < M; ++i) {
+                if (bits[i] != other.bits[i])
+                    return false;
             }
-            return temp.square();
+            return true;
+        }
+
+        Galois Inverse() const {
+            Galois copy = *this;
+            if (copy == Galois::zero()) {
+                throw std::runtime_error("Inverse of zero");
+            }
+
+            Galois t = copy;
+
+            Galois tmp = copy;
+
+            for (int i = 1; i < M - 1; ++i) {
+                tmp = tmp.square();
+                t = t * tmp;
+            }
+
+            return t.square();
         }
 };
 
 int main() {
+
+    std::ofstream fout("result.txt");
+    if (!fout) {
+        std::cerr << "Cannot open result.txt\n";
+        return 1;
+    }
+
+    std::streambuf *oldCout = std::cout.rdbuf();
+    std::cout.rdbuf(fout.rdbuf());
+
     Galois one = Galois::one();
     one.Print("1");
-    Galois A = Galois::fromHex("0B5BEB4A7D26A6452F37734773C1EC148B875533996A");
-    Galois B = Galois::fromHex("0F30EFBEDEDDC63D3A7E355B8177B3582F9A1E83C6A9");
-    std::string N = "0C7ECEA2D10F386F4A9F1A476B55A06E95CD68F5B197";
+    /* Galois A =
+     Galois::fromHex("0B5BEB4A7D26A6452F37734773C1EC148B875533996A"); Galois B =
+     Galois::fromHex("0F30EFBEDEDDC63D3A7E355B8177B3582F9A1E83C6A9");
+     std::string N = "0C7ECEA2D10F386F4A9F1A476B55A06E95CD68F5B197";
+ */
+    Galois A = Galois::fromBinaryString(
+        "1000100001111101110000000100001110101111000101011110000001101101010111"
+        "1110011101111111010111110111010000010010010101000111010100010010110101"
+        "000110110110101001000010110010110");
+    Galois B = Galois::fromBinaryString(
+        "0111001011100001001100001100001100100001111111000010010111001101111011"
+        "1100011111101011001001101010110001010111110111001100100110100011110101"
+        "111111011000111110100000110100000");
+    std::string N = "0011101011010101110100011100011001111001100110001000000110"
+                    "1000001001101101100101010011101101001100110111010101101100"
+                    "110111011001100100000011000011110101000110110010010110001";
 
     A.Print("A");
     B.Print("B");
-    std::cout << "N = " + N << std::endl;
+    std::cout << "N = " + N
+              << "\n "
+                 "===================================================\n";
 
     Galois sum = A + B;
     sum.Print("A + B");
@@ -250,22 +429,31 @@ int main() {
     Galois exponention = A ^ N;
     exponention.Print("A^N");
 
-    /* Galois inv = A.Inverse();
-     inv.Print("Inverse(A)");
+    Galois inv = A.Inverse();
+    inv.Print("Inverse(A)");
 
+    std::cout
+        << "===================================================\nCheck:\n";
+    Galois check = A * inv;
+    check.Print("A * Inverse(A) (Should be all 1s)");
 
-     Galois check = A * inv;
-     check.Print("A * Inverse(A) (Should be all 1s)");
+    Galois C = mul;
+    check = (A + B) * C;
+    check.Print("(A+B)*C");
+    check = B * C + A * C;
+    check.Print("B*C+A*C");
 
-     int Num = 1000;
-     uint64_t sqr_cycles =
-         measure_cycles([&]() { volatile Galois r = A.square(); }, Num);
-     uint64_t mul_cycles =
-         measure_cycles([&]() { volatile Galois r = A * B; }, 100);
+    int Num = 1000;
+    uint64_t sqr_cycles =
+        measure_cycles([&]() { volatile Galois r = A.square(); }, Num);
+    uint64_t mul_cycles =
+        measure_cycles([&]() { volatile Galois r = A * B; }, 100);
 
-     std::cout << "\nAverage CPU cycles (ONB):\n";
-     std::cout << "Square (Shift): " << sqr_cycles << "\n";
-     std::cout << "Multiply:       " << mul_cycles << "\n";
- */
+    std::cout << "\nAverage CPU cycles (ONB):\n";
+    std::cout << "Square (Shift): " << sqr_cycles << "\n";
+    std::cout << "Multiply:       " << mul_cycles << "\n";
+
+    std::cout.rdbuf(oldCout);
+    fout.close();
     return 0;
 }
